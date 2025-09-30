@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>DNA结构3D模型 - 独立版</title>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+            }
+        }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+        import { CSS2DRenderer, CSS2DObject } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/renderers/CSS2DRenderer.js';
+        
+        // 初始化场景
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0a1a);
+        
+        // 添加环境光
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+        
+        // 添加方向光（简化光照，提高性能）
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(10, 10, 20);
+        scene.add(directionalLight);
+        
+        // 初始化相机
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 60; // 增加初始Z轴距离，让模型显示更小
+        
+        // 初始化WebGL渲染器 - 优化移动设备性能
+        const renderer = new THREE.WebGLRenderer({
+            antialias: false, // 在移动设备上禁用抗锯齿以提高性能
+            powerPreference: 'high-performance', // 优先使用高性能GPU
+            alpha: false // 禁用alpha通道以提高性能
+        });
+        renderer.setPixelRatio(window.devicePixelRatio || 1); // 适应不同设备的像素密度
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+        
+        // 初始化CSS2D渲染器用于显示标签
+        const labelRenderer = new CSS2DRenderer();
+        labelRenderer.setSize(window.innerWidth, window.innerHeight);
+        labelRenderer.domElement.style.position = 'absolute';
+        labelRenderer.domElement.style.top = '0';
+        labelRenderer.domElement.style.left = '0';
+        labelRenderer.domElement.style.pointerEvents = 'none';
+        document.body.appendChild(labelRenderer.domElement);
+        
+        // 添加控制器
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.enableRotate = true;
+        controls.enableZoom = true;
+        controls.enablePan = true;
+        controls.rotateSpeed = 1.0;
+        controls.zoomSpeed = 1.0;
+        controls.panSpeed = 0.5;
+        
+        // iOS设备优化
+        controls.touches = {
+            ONE: THREE.TOUCH.ROTATE,
+            TWO: THREE.TOUCH.DOLLY_PAN
+        };
+        controls.enableDamping = true; // 启用阻尼效果使操作更平滑
+        controls.screenSpacePanning = true; // 平移更适合触摸设备
+        controls.minDistance = 5; // 进一步减小最小缩放距离，允许缩得更小
+        controls.maxDistance = 200; // 增加最大缩放距离以适应不同查看需求
+        
+        // DNA相关变量
+        let dnaGroup = null;
+        let basePairCount = 20;
+        let radius = 8; // 减小DNA半径，让整体模型更小
+        let height = 2.5; // 减小DNA高度，让整体模型更小
+        let rotationSpeed = 0.005;
+        
+        // 创建文字标签
+        function createLabel(text, position, color = 0xffffff) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            div.style.color = '#' + color.toString(16).padStart(6, '0');
+            div.style.fontSize = '12px';
+            div.style.fontFamily = 'Arial, sans-serif';
+            div.style.fontWeight = 'bold';
+            div.style.textAlign = 'center';
+            div.style.pointerEvents = 'none';
+            
+            const label = new CSS2DObject(div);
+            label.position.copy(position);
+            return label;
+        }
+        
+        // 创建脱氧核苷酸的分子结构
+        function createNucleotide(x, y, z, strandMaterial, baseType) {
+            // 创建一个组来存放核苷酸的各个部分
+            const nucleotideGroup = new THREE.Group();
+            
+            // 定义各部分材质（使用THREE.MeshBasicMaterial提高性能）
+            const sugarMaterial = new THREE.MeshBasicMaterial({ color: 0x8B4513 }); // 棕色表示五碳糖
+            const phosphateMaterial = new THREE.MeshBasicMaterial({ color: 0x9932CC }); // 紫色表示磷酸
+            
+            // 定义碱基颜色 - 不同碱基使用不同颜色
+            let baseMaterial;
+            let baseColor;
+            switch(baseType) {
+                case 'A':
+                    baseColor = 0xff0000; // 腺嘌呤 - 红色
+                    break;
+                case 'T':
+                    baseColor = 0x0000ff; // 胸腺嘧啶 - 蓝色
+                    break;
+                case 'C':
+                    baseColor = 0x00ff00; // 胞嘧啶 - 绿色
+                    break;
+                case 'G':
+                    baseColor = 0xffff00; // 鸟嘌呤 - 黄色
+                    break;
+                default:
+                    baseColor = 0xffffff;
+            }
+            baseMaterial = new THREE.MeshBasicMaterial({ color: baseColor });
+            
+            // 创建简化的几何形状以提高性能
+            
+            // 创建五碳糖（使用球体代替十二面体）
+            const sugarGeometry = new THREE.SphereGeometry(0.4, 8, 8);
+            const sugar = new THREE.Mesh(sugarGeometry, sugarMaterial);
+            sugar.position.set(0, 0, 0); // 糖位于中心
+            nucleotideGroup.add(sugar);
+            
+            // 创建磷酸基团（使用球体代替立方体）
+            const phosphateGeometry = new THREE.SphereGeometry(0.3, 8, 8);
+            const phosphate = new THREE.Mesh(phosphateGeometry, phosphateMaterial);
+            phosphate.position.set(0.6, 0, 0); // 磷酸连接在糖的一侧
+            nucleotideGroup.add(phosphate);
+            
+            // 创建碱基（使用球体代替八面体）
+            const baseGeometry = new THREE.SphereGeometry(0.5, 8, 8);
+            const base = new THREE.Mesh(baseGeometry, baseMaterial);
+            base.position.set(0, 0, -0.7); // 碱基连接在糖的另一侧
+            nucleotideGroup.add(base);
+            
+            // 创建连接结构（使用圆柱体表示化学键）
+            const bondGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.6, 4);
+            
+            // 连接糖和磷酸的键
+            const sugarPhosphateBond = new THREE.Mesh(bondGeometry, strandMaterial);
+            sugarPhosphateBond.position.set(0.3, 0, 0);
+            nucleotideGroup.add(sugarPhosphateBond);
+            
+            // 连接糖和碱基的键
+            const sugarBaseBond = new THREE.Mesh(bondGeometry, strandMaterial);
+            sugarBaseBond.position.set(0, 0, -0.35);
+            sugarBaseBond.rotateX(Math.PI / 2);
+            nucleotideGroup.add(sugarBaseBond);
+            
+            // 添加碱基字母标签
+            const baseLabel = createLabel(baseType, new THREE.Vector3(0, 0, -0.7), baseColor);
+            nucleotideGroup.add(baseLabel);
+            
+            // 添加磷酸基团字母标签
+            const phosphateLabel = createLabel('P', new THREE.Vector3(0.6, 0, 0), 0x9932CC);
+            nucleotideGroup.add(phosphateLabel);
+            
+            // 设置核苷酸在DNA链上的位置
+            nucleotideGroup.position.set(x, y, z);
+            
+            return {
+                group: nucleotideGroup,
+                sugar: sugar,
+                phosphate: phosphate,
+                base: base,
+                baseLabel: baseLabel,
+                phosphateLabel: phosphateLabel
+            };
+        }
+        
+        // 创建DNA结构
+        function createDNA() {
+            // 清除旧的DNA结构
+            if (dnaGroup) {
+                scene.remove(dnaGroup);
+            }
+            
+            // 清除旧的CSS2D标签DOM元素
+            while (labelRenderer.domElement.firstChild) {
+                labelRenderer.domElement.removeChild(labelRenderer.domElement.firstChild);
+            }
+            
+            dnaGroup = new THREE.Group();
+            dnaGroup.name = 'dna';
+            
+            // 创建两条螺旋链的材质
+            const strand1Material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+            const strand2Material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            
+            // 创建连接两条链的碱基对
+            const basePairs = [];
+            
+            // 为每条链创建点
+            for (let i = 0; i < basePairCount; i++) {
+                const heightPosition = i * height;
+                
+                // 第一条链的位置（螺旋线）
+                const angle1 = i * 0.5;
+                const x1 = radius * Math.cos(angle1);
+                const z1 = radius * Math.sin(angle1);
+                
+                // 第二条链的位置（与第一条链相对）
+                const angle2 = angle1 + Math.PI;
+                const x2 = radius * Math.cos(angle2);
+                const z2 = radius * Math.sin(angle2);
+                
+                // 随机选择碱基对类型
+                const isAT = Math.random() > 0.5;
+                const base1Type = isAT ? 'A' : 'C';
+                const base2Type = isAT ? 'T' : 'G';
+                
+                // 创建详细的核苷酸结构
+                const nucleotide1 = createNucleotide(x1, heightPosition, z1, strand1Material, base1Type);
+                const nucleotide2 = createNucleotide(x2, heightPosition, z2, strand2Material, base2Type);
+                
+                // 添加到DNA组
+                dnaGroup.add(nucleotide1.group);
+                dnaGroup.add(nucleotide2.group);
+                
+                // 创建碱基对之间的氢键（使用细圆柱体表示）
+                const hydrogenBondGeometry = new THREE.CylinderGeometry(0.05, 0.05, (new THREE.Vector3(x2 - x1, 0, z2 - z1)).length(), 4);
+                const hydrogenBondMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 });
+                
+                // 创建2或3个氢键（A-T有2个，C-G有3个）
+                const bondCount = isAT ? 2 : 3;
+                for (let b = 0; b < bondCount; b++) {
+                    // 计算每个氢键的位置
+                    const offset = -0.5 + (b / (bondCount - 1)) * 1.0;
+                    const bondX = (x1 + x2) / 2;
+                    const bondY = heightPosition + offset * 0.3;
+                    const bondZ = (z1 + z2) / 2;
+                    
+                    const hydrogenBond = new THREE.Mesh(hydrogenBondGeometry, hydrogenBondMaterial);
+                    hydrogenBond.position.set(bondX, bondY, bondZ);
+                    hydrogenBond.lookAt(nucleotide2.group.position);
+                    hydrogenBond.rotateX(Math.PI / 2);
+                    
+                    dnaGroup.add(hydrogenBond);
+                }
+                
+                // 保存碱基对信息，用于高亮显示
+                basePairs.push({
+                    nucleotide1: nucleotide1,
+                    nucleotide2: nucleotide2,
+                    type: isAT ? 'AT' : 'CG'
+                });
+            }
+            
+            // 添加点击事件检测辅助
+            dnaGroup.traverse(function(child) {
+                if (child.isMesh) {
+                    child.userData.interactive = true;
+                }
+            });
+            
+            // 居中DNA模型
+            const centerY = (basePairCount - 1) * height / 2;
+            dnaGroup.position.y = -centerY;
+            
+            scene.add(dnaGroup);
+            
+            return basePairs;
+        }
+        
+        // 创建初始DNA
+        let basePairs = createDNA();
+        
+        // 窗口大小调整处理
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            labelRenderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // 控制滑块事件处理
+        const basePairSlider = document.getElementById('basePairSlider');
+        const basePairValue = document.getElementById('basePairValue');
+        
+        basePairSlider.addEventListener('input', () => {
+            basePairCount = parseInt(basePairSlider.value);
+            basePairValue.textContent = basePairCount;
+            basePairs = createDNA();
+        });
+        
+        const rotationSlider = document.getElementById('rotationSlider');
+        const rotationValue = document.getElementById('rotationValue');
+        
+        rotationSlider.addEventListener('input', () => {
+            rotationSpeed = parseFloat(rotationSlider.value);
+            rotationValue.textContent = rotationSpeed;
+        });
+        
+        const radiusSlider = document.getElementById('radiusSlider');
+        const radiusValue = document.getElementById('radiusValue');
+        
+        radiusSlider.addEventListener('input', () => {
+            radius = parseInt(radiusSlider.value);
+            radiusValue.textContent = radius;
+            basePairs = createDNA();
+        });
+        
+        const heightSlider = document.getElementById('heightSlider');
+        const heightValue = document.getElementById('heightValue');
+        
+        heightSlider.addEventListener('input', () => {
+            height = parseInt(heightSlider.value);
+            heightValue.textContent = height;
+            basePairs = createDNA();
+        });
+        
+        // 重置按钮事件处理
+        document.getElementById('resetButton').addEventListener('click', () => {
+            camera.position.set(0, 0, 50);
+            controls.reset();
+        });
+        
+        // 设置鼠标悬停高亮
+        let raycaster = new THREE.Raycaster();
+        let mouse = new THREE.Vector2();
+        let highlightedPair = null;
+        let originalMaterials = {};
+        
+        function highlightPair(pair) {
+            if (highlightedPair === pair) return;
+            
+            // 移除之前的高亮
+            if (highlightedPair) {
+                unhighlightPair();
+            }
+            
+            highlightedPair = pair;
+            
+            // 保存原始材质和标签样式
+            originalMaterials.sugar1 = pair.nucleotide1.sugar.material;
+            originalMaterials.phosphate1 = pair.nucleotide1.phosphate.material;
+            originalMaterials.base1 = pair.nucleotide1.base.material;
+            originalMaterials.sugar2 = pair.nucleotide2.sugar.material;
+            originalMaterials.phosphate2 = pair.nucleotide2.phosphate.material;
+            originalMaterials.base2 = pair.nucleotide2.base.material;
+            
+            // 保存标签原始样式
+            originalMaterials.baseLabel1 = pair.nucleotide1.baseLabel.element.style.color;
+            originalMaterials.baseLabel2 = pair.nucleotide2.baseLabel.element.style.color;
+            originalMaterials.phosphateLabel1 = pair.nucleotide1.phosphateLabel.element.style.color;
+            originalMaterials.phosphateLabel2 = pair.nucleotide2.phosphateLabel.element.style.color;
+            
+            // 应用高亮材质
+            const highlightMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, emissive: 0xffffff });
+            pair.nucleotide1.sugar.material = highlightMaterial;
+            pair.nucleotide1.phosphate.material = highlightMaterial;
+            pair.nucleotide1.base.material = highlightMaterial;
+            pair.nucleotide2.sugar.material = highlightMaterial;
+            pair.nucleotide2.phosphate.material = highlightMaterial;
+            pair.nucleotide2.base.material = highlightMaterial;
+            
+            // 高亮标签
+            pair.nucleotide1.baseLabel.element.style.color = '#ffffff';
+            pair.nucleotide1.baseLabel.element.style.fontWeight = 'bold';
+            pair.nucleotide1.baseLabel.element.style.textShadow = '0 0 5px #ffffff';
+            
+            pair.nucleotide2.baseLabel.element.style.color = '#ffffff';
+            pair.nucleotide2.baseLabel.element.style.fontWeight = 'bold';
+            pair.nucleotide2.baseLabel.element.style.textShadow = '0 0 5px #ffffff';
+            
+            pair.nucleotide1.phosphateLabel.element.style.color = '#ffffff';
+            pair.nucleotide1.phosphateLabel.element.style.fontWeight = 'bold';
+            pair.nucleotide1.phosphateLabel.element.style.textShadow = '0 0 5px #ffffff';
+            
+            pair.nucleotide2.phosphateLabel.element.style.color = '#ffffff';
+            pair.nucleotide2.phosphateLabel.element.style.fontWeight = 'bold';
+            pair.nucleotide2.phosphateLabel.element.style.textShadow = '0 0 5px #ffffff';
+        }
+        
+        function unhighlightPair() {
+            if (!highlightedPair) return;
+            
+            // 恢复原始材质
+            highlightedPair.nucleotide1.sugar.material = originalMaterials.sugar1;
+            highlightedPair.nucleotide1.phosphate.material = originalMaterials.phosphate1;
+            highlightedPair.nucleotide1.base.material = originalMaterials.base1;
+            highlightedPair.nucleotide2.sugar.material = originalMaterials.sugar2;
+            highlightedPair.nucleotide2.phosphate.material = originalMaterials.phosphate2;
+            highlightedPair.nucleotide2.base.material = originalMaterials.base2;
+            
+            // 恢复标签原始样式
+            highlightedPair.nucleotide1.baseLabel.element.style.color = originalMaterials.baseLabel1;
+            highlightedPair.nucleotide1.baseLabel.element.style.fontWeight = 'bold';
+            highlightedPair.nucleotide1.baseLabel.element.style.textShadow = '';
+            
+            highlightedPair.nucleotide2.baseLabel.element.style.color = originalMaterials.baseLabel2;
+            highlightedPair.nucleotide2.baseLabel.element.style.fontWeight = 'bold';
+            highlightedPair.nucleotide2.baseLabel.element.style.textShadow = '';
+            
+            highlightedPair.nucleotide1.phosphateLabel.element.style.color = originalMaterials.phosphateLabel1;
+            highlightedPair.nucleotide1.phosphateLabel.element.style.fontWeight = 'bold';
+            highlightedPair.nucleotide1.phosphateLabel.element.style.textShadow = '';
+            
+            highlightedPair.nucleotide2.phosphateLabel.element.style.color = originalMaterials.phosphateLabel2;
+            highlightedPair.nucleotide2.phosphateLabel.element.style.fontWeight = 'bold';
+            highlightedPair.nucleotide2.phosphateLabel.element.style.textShadow = '';
+            
+            highlightedPair = null;
+            originalMaterials = {};
+        }
+        
+        // 优化射线投射器性能
+        let raycastCount = 0;
+        const MAX_RAYCAST_FPS = 10; // 限制射线投射频率以提高性能
+        
+        // 动画循环
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // 旋转DNA
+            if (dnaGroup && rotationSpeed > 0) {
+                dnaGroup.rotation.y += rotationSpeed;
+            }
+            
+            // 限制射线投射频率以提高移动设备性能
+            raycastCount++;
+            if (raycastCount % Math.ceil(60 / MAX_RAYCAST_FPS) === 0) {
+                // 更新射线投射器以检测鼠标悬停
+                raycaster.setFromCamera(mouse, camera);
+                
+                // 获取所有与射线相交的对象
+                const intersects = raycaster.intersectObjects(scene.children, true);
+                
+                let foundPair = null;
+                // 查找是否与DNA的碱基对相交
+                for (let i = 0; i < intersects.length && !foundPair; i++) {
+                    const object = intersects[i].object;
+                    
+                    // 检查是否是碱基对的一部分
+                    for (let j = 0; j < basePairs.length; j++) {
+                        const pair = basePairs[j];
+                        if (object === pair.nucleotide1.sugar || 
+                            object === pair.nucleotide1.phosphate || 
+                            object === pair.nucleotide1.base || 
+                            object === pair.nucleotide2.sugar || 
+                            object === pair.nucleotide2.phosphate || 
+                            object === pair.nucleotide2.base) {
+                            foundPair = pair;
+                            break;
+                        }
+                    }
+                }
+                
+                // 高亮显示相交的碱基对
+                if (foundPair) {
+                    highlightPair(foundPair);
+                    document.body.style.cursor = 'pointer';
+                } else {
+                    unhighlightPair();
+                    document.body.style.cursor = 'default';
+                }
+            }
+            
+            controls.update();
+            renderer.render(scene, camera);
+            labelRenderer.render(scene, camera);
+        }
+        
+        animate();
+        
+        // 移动设备优化：触摸事件处理
+        let touchStartX, touchStartY;
+        let touchStartTime;
+        let isAnimating = true;
+        let isTouching = false;
+        
+        // 为移动设备添加触摸事件监听器
+        renderer.domElement.addEventListener('touchstart', function(e) {
+            // 阻止默认的触摸行为
+            e.preventDefault();
+            
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            touchStartTime = Date.now();
+            isTouching = true;
+            
+            // 暂停自动旋转
+            if (isAnimating) {
+                rotationSpeed = 0;
+                isAnimating = false;
+            }
+        }, { passive: false }); // 禁用passive以允许preventDefault
+        
+        renderer.domElement.addEventListener('touchend', function(e) {
+            // 阻止默认的触摸行为
+            e.preventDefault();
+            
+            const touchEndX = e.changedTouches[0].clientX;
+            const touchEndY = e.changedTouches[0].clientY;
+            const touchEndTime = Date.now();
+            isTouching = false;
+            
+            // 判断是否为点击事件（快速轻触，移动距离小）
+            const distance = Math.sqrt(
+                Math.pow(touchEndX - touchStartX, 2) + 
+                Math.pow(touchEndY - touchStartY, 2)
+            );
+            const duration = touchEndTime - touchStartTime;
+            
+            if (distance < 10 && duration < 200) {
+                // 点击事件 - 模拟鼠标点击位置
+                const rect = renderer.domElement.getBoundingClientRect();
+                const x = ((touchEndX - rect.left) / rect.width) * 2 - 1;
+                const y = -((touchEndY - rect.top) / rect.height) * 2 + 1;
+                
+                mouse.set(x, y);
+                
+                // 强制立即进行一次射线检测
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObjects(scene.children, true);
+                let foundPair = null;
+                
+                for (let i = 0; i < intersects.length && !foundPair; i++) {
+                    const object = intersects[i].object;
+                    
+                    // 检查是否是可交互的DNA组件
+                    if (object.userData && object.userData.interactive) {
+                        for (let j = 0; j < basePairs.length; j++) {
+                            const pair = basePairs[j];
+                            if (object === pair.nucleotide1.sugar || 
+                                object === pair.nucleotide1.phosphate || 
+                                object === pair.nucleotide1.base || 
+                                object === pair.nucleotide2.sugar || 
+                                object === pair.nucleotide2.phosphate || 
+                                object === pair.nucleotide2.base) {
+                                foundPair = pair;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if (foundPair) {
+                    highlightPair(foundPair);
+                    // 短暂高亮后恢复
+                    setTimeout(() => {
+                        unhighlightPair();
+                    }, 1000);
+                }
+            }
+            
+            // 恢复自动旋转
+            setTimeout(() => {
+                if (!isAnimating && !isTouching) {
+                    rotationSpeed = 0.005;
+                    isAnimating = true;
+                }
+            }, 2000);
+        }, { passive: false }); // 禁用passive以允许preventDefault
+        
+        // 添加touchmove事件处理
+        renderer.domElement.addEventListener('touchmove', function(e) {
+            // 阻止默认的触摸行为
+            e.preventDefault();
+        }, { passive: false }); // 禁用passive以允许preventDefault
+        
+        // 移除全局暴露，避免潜在冲突
+        // 在移动设备上优化性能 - 禁用不必要的控制台日志
+        if (typeof console !== 'undefined') {
+            const originalConsoleLog = console.log;
+            if (window.innerWidth < 768) { // 检测移动设备
+                console.log = function() {};
+            }
+        }
+        
+        // iOS设备内存管理优化
+        window.addEventListener('blur', function() {
+            // 应用进入后台时减少动画
+            if (isAnimating) {
+                rotationSpeed = 0;
+            }
+        });
+        
+        window.addEventListener('focus', function() {
+            // 应用回到前台时恢复动画
+            if (isAnimating) {
+                rotationSpeed = 0.005;
+            }
+        });
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #0a0a1a;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+        }
+        
+        .controls {
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px 10px 0 0;
+            backdrop-filter: blur(10px);
+            color: white;
+            font-family: Arial, sans-serif;
+            width: 100%;
+            max-height: 70vh;
+            overflow-y: auto;
+            padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px));
+            z-index: 10;
+            -webkit-backdrop-filter: blur(10px);
+        }
+        
+        .controls h3 {
+            text-align: center;
+            margin-top: 0;
+            margin-bottom: 20px;
+            font-size: 18px;
+        }
+        
+        .controls label {
+            display: block;
+            margin-bottom: 15px;
+            font-size: 16px;
+        }
+        
+        .controls input[type="range"] {
+            width: 100%;
+            margin-top: 8px;
+            height: 8px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 4px;
+            outline: none;
+        }
+        
+        .controls input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 24px;
+            height: 24px;
+            background: #4CAF50;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 3px solid white;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+        }
+        
+        .controls input[type="range"]::-moz-range-thumb {
+            width: 24px;
+            height: 24px;
+            background: #4CAF50;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 3px solid white;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+        }
+        
+        .controls .value {
+            float: right;
+            font-weight: bold;
+            font-size: 16px;
+            min-width: 50px;
+            text-align: right;
+        }
+        
+        .controls button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 15px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: block;
+            font-size: 18px;
+            margin: 15px auto 0;
+            cursor: pointer;
+            border-radius: 8px;
+            width: 100%;
+            max-width: 200px;
+            font-weight: bold;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            -webkit-transition: all 0.2s ease;
+            transition: all 0.2s ease;
+        }
+        
+        .controls button:active {
+            background-color: #45a049;
+            transform: scale(0.96);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        }
+        
+        /* 安全区域适配 */
+        .safe-area-inset {
+            padding-top: env(safe-area-inset-top, 0px);
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+            padding-left: env(safe-area-inset-left, 0px);
+            padding-right: env(safe-area-inset-right, 0px);
+        }
+        
+        /* 响应式布局 - 大屏幕 */
+        @media (min-width: 768px) {
+            .controls {
+                position: absolute;
+                top: 20px;
+                left: 20px;
+                right: auto;
+                width: 300px;
+                max-width: 300px;
+                max-height: 90vh;
+                border-radius: 10px;
+                transform: none;
+                padding-bottom: 20px;
+            }
+        }
+        
+        /* 滚动条样式 */
+        .controls::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        .controls::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+        
+        .controls::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 4px;
+        }
+        
+        .controls::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.5);
+        }
+        
+        /* iOS设备触摸优化 */
+        @media (hover: none) and (pointer: coarse) {
+            .controls input[type="range"] {
+                height: 10px;
+            }
+            
+            .controls input[type="range"]::-webkit-slider-thumb {
+                width: 28px;
+                height: 28px;
+            }
+            
+            .controls button {
+                padding: 20px;
+                font-size: 20px;
+            }
+        }
+        
+        /* 禁用文字选择 */
+        .controls, .controls * {
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+        }
+    </style>
+</head>
+<body class="safe-area-inset">
+    <div id="canvas-container"></div>
+    <div class="controls">
+        <h3>DNA结构控制</h3>
+        <label>
+            碱基对数目:
+            <span class="value" id="basePairValue">20</span>
+        </label>
+        <input type="range" id="basePairSlider" min="5" max="50" value="20">
+        
+        <label>
+            旋转速度:
+            <span class="value" id="rotationValue">0.005</span>
+        </label>
+        <input type="range" id="rotationSlider" min="0" max="0.02" step="0.001" value="0.005">
+        
+        <label>
+            半径:
+            <span class="value" id="radiusValue">10</span>
+        </label>
+        <input type="range" id="radiusSlider" min="5" max="20" value="10">
+        
+        <label>
+            高度:
+            <span class="value" id="heightValue">3</span>
+        </label>
+        <input type="range" id="heightSlider" min="1" max="10" value="3">
+        
+        <button id="resetButton">重置视图</button>
+    </div>
+</body>
+</html>
